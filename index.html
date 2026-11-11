@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapeador Colaborativo de Acessibilidade</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+        header { background-color: #0056b3; color: white; padding: 15px; text-align: center; }
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        #sidebar { width: 360px; padding: 20px; border-right: 1px solid #ccc; overflow-y: auto; }
+        #map { flex: 1; }
+        .form-group { margin-bottom: 12px; display: flex; flex-direction: column; }
+        .form-row { display: flex; gap: 10px; }
+        label { font-weight: bold; font-size: 0.85rem; margin-bottom: 4px; }
+        input, select, textarea, button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+        button { background-color: #0056b3; color: white; font-weight: bold; cursor: pointer; border: none; margin-top: 5px; }
+        button:hover { background-color: #004085; }
+        .pin-status { background-color: #e9ecef; border-left: 4px solid #0056b3; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 10px; }
+        .point-card { border: 1px solid #ddd; padding: 12px; margin-top: 10px; border-radius: 6px; background-color: #f9f9f9; cursor: pointer; }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; color: #fff; font-weight: bold; }
+        .badge-total { background-color: #28a745; }
+        .badge-parcial { background-color: #ffc107; color: #000; }
+        .badge-inacessivel { background-color: #dc3545; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>♿ Mapeador Colaborativo de Acessibilidade - Paraná</h1>
+    </header>
+
+    <div class="main-container">
+        <aside id="sidebar">
+            <h2>Navegação e Avaliação</h2>
+
+            <!-- Seleção da Cidade (Move o mapa automaticamente) -->
+            <div class="form-group" style="margin-top: 10px;">
+                <label for="cidadeSelect">Selecione a Cidade do Paraná:</label>
+                <select id="cidadeSelect" onchange="mudarCidade()">
+                    <option value="-25.4284,-49.2733|Curitiba">Curitiba</option>
+                    <option value="-23.3103,-51.1628|Londrina">Londrina</option>
+                    <option value="-23.4209,-51.9331|Maringá">Maringá</option>
+                    <option value="-24.9555,-53.4552|Cascavel">Cascavel</option>
+                    <option value="-24.7198,-53.7434|Toledo">Toledo</option>
+                    <option value="-25.0945,-50.1619|Ponta Grossa">Ponta Grossa</option>
+                    <option value="-25.5163,-54.5854|Foz do Iguaçu">Foz do Iguaçu</option>
+                    <option value="-25.5161,-48.5225|Paranaguá">Paranaguá</option>
+                </select>
+            </div>
+
+            <hr style="margin: 15px 0;">
+
+            <form id="locationForm">
+                <!-- Status da Seleção no Mapa -->
+                <div id="pinStatus" class="pin-status">
+                    📍 <strong>Clique no mapa</strong> no local do estabelecimento para marcar o ponto.
+                </div>
+
+                <!-- Latitude e Longitude ocultas (salvas automaticamente via JavaScript) -->
+                <input type="hidden" id="lat">
+                <input type="hidden" id="lng">
+
+                <div class="form-group">
+                    <label for="estabelecimento">Nome do Estabelecimento / Local:</label>
+                    <input type="text" id="estabelecimento" placeholder="Ex: Restaurante do Zé, Farmácia Central" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="type">Recurso de Acessibilidade:</label>
+                    <select id="type">
+                        <option value="Rampa de Acesso">Rampa de Acesso</option>
+                        <option value="Elevador Adaptado">Elevador Adaptado</option>
+                        <option value="Banheiro Acessível">Banheiro Acessível</option>
+                        <option value="Piso Tátil">Piso Tátil</option>
+                        <option value="Vaga Reservada">Vaga Reservada</option>
+                        <option value="Sinalização Sonora">Sinalização Sonora</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="status">Nível de Acessibilidade:</label>
+                    <select id="status">
+                        <option value="total">Totalmente Acessível</option>
+                        <option value="parcial">Parcialmente Acessível</option>
+                        <option value="inacessivel">Inacessível / Danificado</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="comentario">Seu Comentário / Avaliação:</label>
+                    <textarea id="comentario" rows="3" placeholder="Escreva sobre a entrada, atendimento ou facilidade de acesso..." required></textarea>
+                </div>
+
+                <button type="submit">Publicar Avaliação</button>
+            </form>
+
+            <h3 style="margin-top: 20px;">Estabelecimentos Avaliados</h3>
+            <div id="pointsList"></div>
+        </aside>
+
+        <main id="map"></main>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const API_URL = '/api/pontos';
+        let map;
+        let tempMarker = null;
+        let markers = [];
+        let cidadeAtual = "Curitiba";
+
+        function initMap() {
+            // Inicializa centralizado em Curitiba por padrão
+            map = L.map('map').setView([-25.4284, -49.2733], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+            // Clique no mapa escolhe a posição do estabelecimento sem digitar latitude/longitude
+            map.on('click', function(e) {
+                const lat = e.latlng.lat.toFixed(6);
+                const lng = e.latlng.lng.toFixed(6);
+
+                document.getElementById('lat').value = lat;
+                document.getElementById('lng').value = lng;
+
+                if (tempMarker) map.removeLayer(tempMarker);
+                tempMarker = L.marker([lat, lng]).addTo(map);
+
+                document.getElementById('pinStatus').innerHTML = `✅ <strong>Local selecionado!</strong> Preencha o nome do estabelecimento e os comentários ao lado.`;
+                document.getElementById('pinStatus').style.borderLeftColor = '#28a745';
+            });
+
+            carregarPontos();
+        }
+
+        // Altera a visualização do mapa conforme a cidade selecionada
+        function mudarCidade() {
+            const select = document.getElementById('cidadeSelect');
+            const [coords, nomeCidade] = select.value.split('|');
+            const [lat, lng] = coords.split(',');
+
+            cidadeAtual = nomeCidade;
+            map.setView([parseFloat(lat), parseFloat(lng)], 14);
+        }
+
+        async function carregarPontos() {
+            try {
+                const response = await fetch(API_URL);
+                const pontos = await response.json();
+                renderizarPontos(pontos);
+            } catch (error) {
+                console.error("Erro ao carregar dados do Java:", error);
+            }
+        }
+
+        document.getElementById('locationForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const lat = document.getElementById('lat').value;
+            const lng = document.getElementById('lng').value;
+
+            if (!lat || !lng) {
+                alert("Por favor, clique em um ponto do mapa para indicar onde fica o estabelecimento!");
+                return;
+            }
+
+            const novoPonto = {
+                estado: "PR",
+                cidade: cidadeAtual,
+                estabelecimento: document.getElementById('estabelecimento').value,
+                tipo: document.getElementById('type').value,
+                status: document.getElementById('status').value,
+                lat: parseFloat(lat),
+                lng: parseFloat(lng),
+                comentario: document.getElementById('comentario').value
+            };
+
+            try {
+                await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(novoPonto)
+                });
+
+                this.reset();
+                if (tempMarker) map.removeLayer(tempMarker);
+                document.getElementById('lat').value = '';
+                document.getElementById('lng').value = '';
+                document.getElementById('pinStatus').innerHTML = `📍 <strong>Clique no mapa</strong> no local do estabelecimento para marcar o ponto.`;
+                document.getElementById('pinStatus').style.borderLeftColor = '#0056b3';
+
+                carregarPontos();
+            } catch (error) {
+                alert("Erro ao enviar avaliação para o servidor Java!");
+            }
+        });
+
+        function renderizarPontos(pontos) {
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+            const pointsList = document.getElementById('pointsList');
+            pointsList.innerHTML = '';
+
+            pontos.forEach(pt => {
+                const marker = L.marker([pt.lat, pt.lng]).addTo(map)
+                    .bindPopup(`
+                        <b>${pt.estabelecimento}</b> (${pt.cidade})<br>
+                        <strong>Recurso:</strong> ${pt.tipo}<br>
+                        <strong>Status:</strong> ${pt.status}<br>
+                        <p style="margin-top:5px;"><em>"${pt.comentario}"</em></p>
+                    `);
+                markers.push(marker);
+
+                const statusLabel = pt.status === 'total' ? 'Total' : pt.status === 'parcial' ? 'Parcial' : 'Inacessível';
+                const badgeClass = `badge badge-${pt.status}`;
+
+                const card = document.createElement('div');
+                card.className = 'point-card';
+                card.innerHTML = `
+                    <strong>${pt.estabelecimento}</strong> <span class="${badgeClass}">${statusLabel}</span>
+                    <br><small>📍 ${pt.cidade || 'Paraná'}</small>
+                    <br><small>♿ ${pt.tipo}</small>
+                    <p style="margin-top: 6px; font-size: 0.85rem; color: #444;">"${pt.comentario}"</p>
+                `;
+                card.onclick = () => {
+                    map.setView([pt.lat, pt.lng], 16);
+                    marker.openPopup();
+                };
+                pointsList.appendChild(card);
+            });
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
